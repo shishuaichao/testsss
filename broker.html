@@ -1,0 +1,447 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>推数更新模拟（500条/每2s推30条/更新机构list/闪烁2s）</title>
+  <style>
+    :root {
+      --bg: #0b1020;
+      --panel: #121a33;
+      --text: #e8ecff;
+      --muted: #aab3dd;
+      --line: rgba(255,255,255,.08);
+      --accent: #7aa2ff;
+      --warn: #ffd166;
+    }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    header {
+      padding: 16px 18px;
+      border-bottom: 1px solid var(--line);
+      position: sticky;
+      top: 0;
+      background: linear-gradient(180deg, rgba(11,16,32,.98), rgba(11,16,32,.92));
+      backdrop-filter: blur(6px);
+      z-index: 3;
+    }
+    .row {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .pill {
+      padding: 6px 10px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255,255,255,.03);
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .pill b { color: var(--text); font-weight: 600; }
+    button {
+      appearance: none;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,.06);
+      color: var(--text);
+      padding: 8px 12px;
+      border-radius: 10px;
+      cursor: pointer;
+    }
+    button:hover { border-color: rgba(122,162,255,.5); }
+    button:active { transform: translateY(1px); }
+
+    main { padding: 14px 18px 22px; }
+    .grid {
+      display: grid;
+      grid-template-columns: 1.2fr 2.2fr 1fr;
+      gap: 10px;
+      align-items: start;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      overflow: hidden;
+      min-height: 180px;
+    }
+    .panel h3 {
+      margin: 0;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      font-size: 14px;
+      color: var(--text);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .panel .body { padding: 12px 14px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+
+    .list {
+      height: calc(100vh - 170px);
+      overflow: auto;
+      border-top: 1px solid var(--line);
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    thead th {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      background: rgba(18,26,51,.98);
+      border-bottom: 1px solid var(--line);
+      padding: 10px 10px;
+      text-align: left;
+      color: var(--muted);
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    tbody td {
+      border-bottom: 1px solid rgba(255,255,255,.06);
+      padding: 9px 10px;
+      vertical-align: top;
+    }
+    .muted { color: var(--muted); }
+    .orgs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .org {
+      border: 1px solid rgba(255,255,255,.10);
+      background: rgba(255,255,255,.04);
+      padding: 4px 6px;
+      border-radius: 10px;
+      color: var(--text);
+      white-space: nowrap;
+    }
+    .org .k { color: var(--muted); margin-right: 4px; }
+    .org .v { color: var(--warn); font-variant-numeric: tabular-nums; }
+
+    /* 更新后闪烁2s：给行加 class=blink-2s */
+    @keyframes blink2s {
+      0%   { background: rgba(122,162,255,.0); }
+      12%  { background: rgba(122,162,255,.22); }
+      24%  { background: rgba(122,162,255,.0); }
+      36%  { background: rgba(122,162,255,.22); }
+      48%  { background: rgba(122,162,255,.0); }
+      60%  { background: rgba(122,162,255,.22); }
+      72%  { background: rgba(122,162,255,.0); }
+      84%  { background: rgba(122,162,255,.22); }
+      100% { background: rgba(122,162,255,.0); }
+    }
+    tr.blink-2s td {
+      animation: blink2s 2s ease-in-out 1;
+    }
+
+    .small { font-size: 11px; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+  </style>
+</head>
+<body>
+<header>
+  <div class="row">
+    <div class="pill">总数据：<b id="totalN">500</b></div>
+    <div class="pill">机构数/条：<b>6</b></div>
+    <div class="pill">推送间隔：<b>2s</b></div>
+    <div class="pill">每次推送：<b>30</b> 条</div>
+    <div class="pill">上次推送耗时：<b id="lastMs">-</b> ms</div>
+    <div class="pill">累计推送次数：<b id="tickN">0</b></div>
+
+    <button id="btnToggle">暂停</button>
+    <button id="btnPushOnce">手动推送一次</button>
+    <button id="btnReset">重置数据</button>
+  </div>
+</header>
+
+<main class="grid">
+  <section class="panel">
+    <h3>说明 <span class="small muted">（索引查找 + 按机构更新 + 闪烁2s）</span></h3>
+    <div class="body">
+      <div>1) 初始化 500 条数据，每条 A = 6 家机构（orgId: 0~5），每家有一个 value。</div>
+      <div>2) 每 2 秒生成 30 条更新（随机挑 30 个 dataId），每条更新内随机更新部分机构 value。</div>
+      <div>3) 用 <span class="mono">Map(dataId → record)</span> O(1) 命中记录；再用 <span class="mono">orgId</span> 精确定位更新机构。</div>
+      <div>4) 被更新的行会闪烁 2 秒（仅视觉效果，用于观察刷新）。</div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h3>数据列表 <span class="small muted">（只渲染前 200 行以保证流畅，可改）</span></h3>
+    <div class="list">
+      <table>
+        <thead>
+          <tr>
+            <th style="width: 90px;">dataId</th>
+            <th>A（6家机构）</th>
+            <th style="width: 140px;">min / max</th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h3>最近一次推送内容 <span class="small muted">（节选）</span></h3>
+    <div class="body">
+      <div class="muted">展示最近推送的前 5 条更新（每条包含更新到的机构）。</div>
+      <pre id="recent" class="mono" style="margin:10px 0 0; white-space:pre-wrap; color: var(--text);"></pre>
+    </div>
+  </section>
+</main>
+
+<script>
+  // ====== 参数 ======
+  const TOTAL = 500;
+  const ORGS_PER = 6;
+  const PUSH_SIZE = 30;
+  const INTERVAL_MS = 500;
+  const RENDER_LIMIT = 200; // 为了演示顺滑，只渲染前200条；需要全量可改为 500
+
+  // ====== 状态 ======
+  let records = [];
+  let indexById = new Map();
+  let timer = null;
+  let tick = 0;
+  let running = true;
+
+  // ====== 工具函数 ======
+  const rndInt = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
+  const pickUniqueIds = (n, maxExclusive) => {
+    const set = new Set();
+    while (set.size < n) set.add(rndInt(0, maxExclusive - 1));
+    return Array.from(set);
+  };
+
+  // 计算 min/max（针对 A 里的 value）
+  function calcMinMax(A) {
+    let min = Infinity, max = -Infinity;
+    for (const org of A) {
+      const v = org.value;
+      if (v < min) min = v;
+      if (v > max) max = v;
+    }
+    return { min, max };
+  }
+
+  // ====== 初始化数据 ======
+  function buildInitial() {
+    records = [];
+    indexById = new Map();
+
+    for (let i = 0; i < TOTAL; i++) {
+      const A = [];
+      for (let j = 0; j < ORGS_PER; j++) {
+        A.push({
+          orgId: j,
+          orgName: "机构" + (j + 1),
+          value: rndInt(1, 1000)
+        });
+      }
+      const mm = calcMinMax(A);
+      const rec = {
+        id: i,
+        A,
+        min: mm.min,
+        max: mm.max,
+        _updatedAt: 0
+      };
+      records.push(rec);
+      indexById.set(i, rec);
+    }
+  }
+
+  // ====== 渲染 ======
+  function renderTable() {
+    const tbody = document.getElementById("tbody");
+    tbody.innerHTML = "";
+
+    const n = Math.min(RENDER_LIMIT, records.length);
+    for (let i = 0; i < n; i++) {
+      const rec = records[i];
+      const tr = document.createElement("tr");
+      tr.dataset.id = rec.id;
+
+      const tdId = document.createElement("td");
+      tdId.textContent = rec.id;
+
+      const tdA = document.createElement("td");
+      const wrap = document.createElement("div");
+      wrap.className = "orgs";
+      for (const org of rec.A) {
+        const badge = document.createElement("span");
+        badge.className = "org";
+        badge.innerHTML = `<span class="k">${org.orgName}</span><span class="v">${org.value}</span>`;
+        wrap.appendChild(badge);
+      }
+      tdA.appendChild(wrap);
+
+      const tdMM = document.createElement("td");
+      tdMM.innerHTML = `<div class="mono">min: ${rec.min}</div><div class="mono">max: ${rec.max}</div>`;
+
+      tr.appendChild(tdId);
+      tr.appendChild(tdA);
+      tr.appendChild(tdMM);
+      tbody.appendChild(tr);
+    }
+  }
+
+  function rerenderRowIfVisible(id) {
+    // 只对已渲染范围内的行做 DOM 更新（id<RENDER_LIMIT 时才在表里）
+    if (id >= RENDER_LIMIT) return;
+    const tbody = document.getElementById("tbody");
+    const tr = tbody.querySelector(`tr[data-id="${id}"]`);
+    if (!tr) return;
+
+    const rec = indexById.get(id);
+    const tds = tr.querySelectorAll("td");
+    // tds[0] 是 id，不动
+
+    // 更新 A 列
+    const tdA = tds[1];
+    tdA.innerHTML = "";
+    const wrap = document.createElement("div");
+    wrap.className = "orgs";
+    for (const org of rec.A) {
+      const badge = document.createElement("span");
+      badge.className = "org";
+      badge.innerHTML = `<span class="k">${org.orgName}</span><span class="v">${org.value}</span>`;
+      wrap.appendChild(badge);
+    }
+    tdA.appendChild(wrap);
+
+    // 更新 min/max
+    const tdMM = tds[2];
+    tdMM.innerHTML = `<div class="mono">min: ${rec.min}</div><div class="mono">max: ${rec.max}</div>`;
+
+    // 加闪烁class（2s），并确保可重复触发
+    tr.classList.remove("blink-2s");
+    // 强制 reflow 以便重新触发动画
+    void tr.offsetWidth;
+    tr.classList.add("blink-2s");
+  }
+
+  // ====== 模拟推数数据（30条） ======
+  function generatePushBatch() {
+    const ids = pickUniqueIds(PUSH_SIZE, TOTAL);
+
+    const batch = ids.map(id => {
+      // 每条更新随机更新 1~6 家机构
+      const orgIds = pickUniqueIds(rndInt(1, ORGS_PER), ORGS_PER);
+
+      const updatedOrgs = orgIds.map(oid => ({
+        orgId: oid,
+        // 这里用新 value 覆盖；你也可以把更多字段一起推
+        value: rndInt(1, 1000)
+      }));
+
+      return {
+        id,
+        AUpdates: updatedOrgs
+      };
+    });
+
+    return batch;
+  }
+
+  // ====== 应用更新：更新原有数据中对应机构信息 ======
+  function applyBatch(batch) {
+    const t0 = performance.now();
+    const updatedIds = [];
+
+    for (const item of batch) {
+      const rec = indexById.get(item.id);
+      if (!rec) continue;
+
+      // 建一个 orgId -> index 的小索引，避免每次 find
+      // 由于固定6个，这里也可以直接 rec.A[orgId]（若保证 orgId 就是下标）
+      const pos = new Map();
+      for (let i = 0; i < rec.A.length; i++) pos.set(rec.A[i].orgId, i);
+
+      for (const up of item.AUpdates) {
+        const idx = pos.get(up.orgId);
+        if (idx == null) continue;
+        rec.A[idx].value = up.value;
+      }
+
+      const mm = calcMinMax(rec.A);
+      rec.min = mm.min;
+      rec.max = mm.max;
+      rec._updatedAt = Date.now();
+
+      updatedIds.push(rec.id);
+    }
+
+    const t1 = performance.now();
+    document.getElementById("lastMs").textContent = (t1 - t0).toFixed(2);
+
+    // 更新可视区域 DOM + 闪烁 2s
+    for (const id of updatedIds) rerenderRowIfVisible(id);
+
+    return updatedIds;
+  }
+
+  function updateRecent(batch) {
+    const sample = batch.slice(0, 5).map(x => ({
+      id: x.id,
+      AUpdates: x.AUpdates
+    }));
+    document.getElementById("recent").textContent = JSON.stringify(sample, null, 2);
+  }
+
+  // ====== 定时推送 ======
+  function pushOnce() {
+    const batch = generatePushBatch();
+    updateRecent(batch);
+    applyBatch(batch);
+    tick++;
+    document.getElementById("tickN").textContent = String(tick);
+  }
+
+  function start() {
+    if (timer) return;
+    timer = setInterval(pushOnce, INTERVAL_MS);
+    running = true;
+    document.getElementById("btnToggle").textContent = "暂停";
+  }
+  function stop() {
+    if (!timer) return;
+    clearInterval(timer);
+    timer = null;
+    running = false;
+    document.getElementById("btnToggle").textContent = "继续";
+  }
+
+  // ====== 绑定事件 ======
+  document.getElementById("btnToggle").addEventListener("click", () => {
+    if (running) stop(); else start();
+  });
+  document.getElementById("btnPushOnce").addEventListener("click", () => {
+    pushOnce();
+  });
+  document.getElementById("btnReset").addEventListener("click", () => {
+    stop();
+    tick = 0;
+    document.getElementById("tickN").textContent = "0";
+    document.getElementById("lastMs").textContent = "-";
+    buildInitial();
+    renderTable();
+    start();
+  });
+
+  // ====== 启动 ======
+  document.getElementById("totalN").textContent = String(TOTAL);
+  buildInitial();
+  renderTable();
+  start();
+</script>
+</body>
+</html>
